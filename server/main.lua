@@ -1,5 +1,5 @@
 lib.versionCheck('Qbox-project/qbx_management')
-if not lib.checkDependency('qbx_core', '1.3.0', true) then error() return end
+if not lib.checkDependency('qbx_core', '1.7.0', true) then error() return end
 if not lib.checkDependency('ox_lib', '3.13.0', true) then error() return end
 
 local config = require 'config.server'
@@ -13,83 +13,23 @@ for groupName, menuInfo in pairs(config.menus) do
 	menus[#menus + 1] = menuInfo
 end
 
-local function getPlayerMenuEntry(isOnline, player, groupType)
-	if isOnline then
-		return {
-			cid = player.PlayerData.citizenid,
-			grade = player.PlayerData[groupType].grade,
-			isboss = player.PlayerData[groupType].isboss,
-			name = '🟢 '..player.PlayerData.charinfo.firstname..' '..player.PlayerData.charinfo.lastname
-		}
-	else
-		return {
-			cid = player.citizenid,
-			grade =  player[groupType].grade,
-			isboss = player[groupType].isboss,
-			name = '❌ '..player.charinfo.firstname..' '..player.charinfo.lastname
-		}
-	end
-end
-
 local function getMenuEntries(groupName, groupType)
-	local onlinePlayers = {}
 	local menuEntries = {}
 
-	local players = exports.qbx_core:GetQBPlayers()
-	for _, qbPlayer in pairs(players) do
-		if qbPlayer.PlayerData[groupType].name == groupName then
-			onlinePlayers[qbPlayer.PlayerData.citizenid] = true
-			menuEntries[#menuEntries + 1] = getPlayerMenuEntry(true, qbPlayer, groupType)
-		end
-	end
-
-	local dbPlayers = FetchPlayerEntitiesByGroup(groupName, groupType)
-	for _, player in pairs(dbPlayers) do
-		if not onlinePlayers[player.citizenid] then
-            menuEntries[#menuEntries + 1] = getPlayerMenuEntry(false, player, groupType)
-        end
-	end
+    local groupEntries = FetchPlayersInGroup(groupName, groupType)
+    for i = 1, #groupEntries do
+        local citizenid = groupEntries[i].citizenid
+        local grade = groupEntries[i].grade
+        local player = exports.qbx_core:GetPlayerByCitizenId(citizenid) or exports.qbx_core:GetOfflinePlayer(citizenid)
+        local namePrefix = player.Offline and '❌ ' or '🟢 '
+        menuEntries[#menuEntries + 1] = {
+            cid = citizenid,
+			grade = grade,
+			name = namePrefix..player.PlayerData.charinfo.firstname..' '..player.PlayerData.charinfo.lastname
+        }
+    end
 
 	return menuEntries
-end
-
-local function updatePlayer(type, jobName, groupType, grade)
-	local playerJson, jobData
-	if type == 'update' then
-		jobData = groupType == 'gang' and GANGS[jobName] or JOBS[jobName]
-
-		playerJson = {
-			name = jobName,
-			label = jobData.label,
-			isboss = jobData.grades[grade].isboss,
-			grade = {
-				name = jobData.grades[grade].name,
-				level = grade
-			}
-		}
-
-		if groupType == 'job' then
-			playerJson.payment = JOBS[jobName].grades[grade].payment
-			playerJson.onduty = false
-		end
-	elseif type == 'fire' then
-		jobData = groupType == 'gang' and GANGS['none'] or JOBS['unemployed']
-
-		playerJson = {
-			name = groupType == 'gang' and 'none' or 'unemployed',
-			label = jobData.label,
-			grade = {
-				name = jobData.grades[0].name,
-				level = 0
-			}
-		}
-
-		if groupType == 'job' then
-			playerJson.payment = JOBS['unemployed'].grades[0].payment
-		end
-	end
-
-	return playerJson
 end
 
 -- Get a list of employees for a given group. Currently uses MySQL queries to return offline players.
@@ -103,7 +43,7 @@ lib.callback.register('qbx_management:server:getEmployees', function(source, gro
 
 	local menuEntries = getMenuEntries(groupName, groupType)
     table.sort(menuEntries, function(a, b)
-		return a.grade.level > b.grade.level
+		return a.grade > b.grade
 	end)
 
 	return menuEntries
@@ -131,25 +71,17 @@ lib.callback.register('qbx_management:server:updateGrade', function(source, citi
 		return
 	end
 
-	local success
-	local gradeName = groupType == 'gang' and GANGS[jobName].grades[newGrade].name or JOBS[jobName].grades[newGrade].name
-	if employee then
-		success = groupType == 'gang' and employee.Functions.SetGang(jobName, newGrade) or employee.Functions.SetJob(jobName, newGrade)
-	else
-		local role = updatePlayer('update', jobName, groupType, newGrade)
-		success = UpdatePlayerGroup(citizenId, groupType, role)
-	end
-
-    if success then
-        if employee then
-			exports.qbx_core:Notify(employee.PlayerData.source, locale('success.promoted_to')..gradeName..'.', 'success')
-		end
-        exports.qbx_core:Notify(source, locale('success.promoted'), 'success')
+    if groupType == 'job' then
+        exports.qbx_core:AddPlayerToJob(citizenId, jobName, newGrade)
     else
-        exports.qbx_core:Notify(source, locale('error.grade_not_exist'), 'error')
+        exports.qbx_core:AddPlayerToGang(citizenId, jobName, newGrade)
     end
 
-	return nil
+    if employee then
+	    local gradeName = groupType == 'gang' and GANGS[jobName].grades[newGrade].name or JOBS[jobName].grades[newGrade].name
+        exports.qbx_core:Notify(employee.PlayerData.source, locale('success.promoted_to')..gradeName..'.', 'success')
+    end
+    exports.qbx_core:Notify(source, locale('success.promoted'), 'success')
 end)
 
 -- Callback to hire online player as employee of a given group
@@ -166,23 +98,23 @@ lib.callback.register('qbx_management:server:hireEmployee', function(source, emp
         return
     end
 
-	local jobName = player.PlayerData[groupType].name
+	local groupName = player.PlayerData[groupType].name
 	local logArea = groupType == 'gang' and 'Gang' or 'Boss'
 
-    local success = groupType == 'gang' and target.Functions.SetGang(jobName, groupType) or target.Functions.SetJob(jobName, groupType)
-    local grade = groupType == 'gang' and GANGS[jobName].grades[0].name or JOBS[jobName].grades[0].name
-
-    if success then
-        local playerFullName = player.PlayerData.charinfo.firstname..' '..player.PlayerData.charinfo.lastname
-        local targetFullName = target.PlayerData.charinfo.firstname..' '..target.PlayerData.charinfo.lastname
-        local organizationLabel = player.PlayerData[groupType].label
-		exports.qbx_core:Notify(source, locale('success.hired_into', targetFullName, organizationLabel), 'success')
-        exports.qbx_core:Notify(target.PlayerData.source, locale('success.hired_to')..organizationLabel, 'success')
-		logger.log({source = 'qbx_management', event = 'hireEmployee', message = string.format('%s | %s hired %s into %s at grade %s', logArea, playerFullName, targetFullName, organizationLabel, grade), webhook = config.discordWebhook})
+    if groupType == 'job' then
+        exports.qbx_core:AddPlayerToJob(target.PlayerData.citizenid, groupName, 0)
+        exports.qbx_core:SetPlayerPrimaryJob(target.PlayerData.citizenid, groupName)
     else
-        exports.qbx_core:Notify(source, locale('error.couldnt_hire'), 'error')
+        exports.qbx_core:AddPlayerToGang(target.PlayerData.citizenid, groupName, 0)
+        exports.qbx_core:SetPlayerPrimaryGang(target.PlayerData.citizenid, groupName)
     end
-	return nil
+
+    local playerFullName = player.PlayerData.charinfo.firstname..' '..player.PlayerData.charinfo.lastname
+    local targetFullName = target.PlayerData.charinfo.firstname..' '..target.PlayerData.charinfo.lastname
+    local organizationLabel = player.PlayerData[groupType].label
+    exports.qbx_core:Notify(source, locale('success.hired_into', targetFullName, organizationLabel), 'success')
+    exports.qbx_core:Notify(target.PlayerData.source, locale('success.hired_to')..organizationLabel, 'success')
+    logger.log({source = 'qbx_management', event = 'hireEmployee', message = string.format('%s | %s hired %s into %s at grade %s', logArea, playerFullName, targetFullName, organizationLabel, 0), webhook = config.discordWebhook})
 end)
 
 -- Returns playerdata for a given table of player server ids.
@@ -209,87 +141,58 @@ lib.callback.register('qbx_management:server:getPlayers', function(_, closePlaye
 	return players
 end)
 
--- Function to fire an online player from a given group
--- Should be merged with the offline player function once an export from the core is available
----@param source integer
----@param employee Player Player object of player being fired
----@param player Player Player object of player initiating firing action
+
+---@param employeeCitizenId string
+---@param boss Player
+---@param groupName string
 ---@param groupType GroupType
-local function fireOnlineEmployee(source, employee, player, groupType)
-	if employee.PlayerData.citizenid == player.PlayerData.citizenid then
+---@return boolean success
+local function fireEmployee(employeeCitizenId, boss, groupName, groupType)
+    local employee = exports.qbx_core:GetPlayerByCitizenId(employeeCitizenId) or exports.qbx_core:GetOfflinePlayer(employeeCitizenId)
+    if employee.PlayerData.citizenid == boss.PlayerData.citizenid then
 		local message = groupType == 'gang' and locale('error.kick_yourself') or locale('error.fire_yourself')
-		exports.qbx_core:Notify(source, message, 'error')
+		exports.qbx_core:Notify(boss.PlayerData.source, message, 'error')
+		return false
+	end
+    if not employee then
+		exports.qbx_core:Notify(boss.PlayerData.source, locale('error.person_doesnt_exist'), 'error')
 		return false
 	end
 
-	if employee.PlayerData[groupType].grade.level >= player.PlayerData[groupType].grade.level then
-		exports.qbx_core:Notify(source, locale('error.fire_boss'), 'error')
+    local employeeGrade = groupType == 'job' and employee.PlayerData.jobs?[groupName] or employee.PlayerData.gangs?[groupName]
+    local bossGrade = groupType == 'job' and boss.PlayerData.jobs?[groupName] or boss.PlayerData.gangs?[groupName]
+    if employeeGrade >= bossGrade then
+		exports.qbx_core:Notify(boss.PlayerData.source, locale('error.fire_boss'), 'error')
 		return false
 	end
 
-	local success = groupType == 'gang' and employee.Functions.SetGang('none', 0) or employee.Functions.SetJob('unemployed', 0)
-	if success then
-		local message = groupType == 'gang' and locale('error.you_gang_fired') or locale('error.you_job_fired')
+	if groupType == 'job' then
+        exports.qbx_core:RemovePlayerFromJob(employee.PlayerData.citizenid, groupName)
+	else
+        exports.qbx_core:RemovePlayerFromGang(employee.PlayerData.citizenid, groupName)
+	end
+
+    if not employee.Offline then
+        local message = groupType == 'gang' and locale('error.you_gang_fired', GANGS[groupName].label) or locale('error.you_job_fired', JOBS[groupName].label)
 		exports.qbx_core:Notify(employee.PlayerData.source, message, 'error')
-		return true
-	end
+    end
 
-	return false
-end
-
--- Function to fire an offline player from a given group
--- Should be merged with the online player function once an export from the core is available
----@param source integer
----@param employee string citizenid of player to be fired
----@param player Player Player object of player initiating firing action
----@param groupType GroupType
-local function fireOfflineEmployee(source, employee, player, groupType)
-	local offlineEmployee = FetchPlayerEntityByCitizenId(employee)
-	if not offlineEmployee[1] then
-		exports.qbx_core:Notify(source, locale('error.person_doesnt_exist'), 'error')
-		return false, nil
-	end
-
-	employee = offlineEmployee[1]
-	employee[groupType] = json.decode(employee[groupType])
-	employee.charinfo = json.decode(employee.charinfo)
-
-	if employee[groupType].grade.level >= player.PlayerData[groupType].grade.level then
-		exports.qbx_core:Notify(source, locale('error.fire_boss'), 'error')
-		return false, nil
-	end
-
-	local role = updatePlayer('fire', groupType)
-	local updateColumn = groupType == 'gang' and 'gang' or 'job'
-	local employeeFullName = employee.charinfo.firstname..' '..employee.charinfo.lastname
-	local success = UpdatePlayerGroup(employee.citizenid, updateColumn, role)
-	if success > 0 then
-		return true, employeeFullName
-	end
-
-	return false, nil
+    return true
 end
 
 -- Callback for firing a player from a given society.
--- Branches to online and offline functions depending on if the target is available.
--- Once an export is available this should be rewritten to remove the MySQL queries.
 ---@param employee string citizenid of employee to be fired
 ---@param groupType GroupType
 lib.callback.register('qbx_management:server:fireEmployee', function(source, employee, groupType)
 	local player = exports.qbx_core:GetPlayer(source)
-	local firedEmployee = exports.qbx_core:GetPlayerByCitizenId(employee) or nil
+	local firedEmployee = exports.qbx_core:GetPlayerByCitizenId(employee) or exports.qbx_core:GetOfflinePlayer(employee)
 	local playerFullName = player.PlayerData.charinfo.firstname..' '..player.PlayerData.charinfo.lastname
 	local organizationLabel = player.PlayerData[groupType].label
 
 	if not player.PlayerData[groupType].isboss then return end
-
-	local success, employeeFullName
-	if firedEmployee then
-		employeeFullName = firedEmployee.PlayerData.charinfo.firstname..' '..firedEmployee.PlayerData.charinfo.lastname
-		success = fireOnlineEmployee(source, firedEmployee, player, groupType)
-	else
-		success, employeeFullName = fireOfflineEmployee(source, employee, player, groupType)
-	end
+    if not firedEmployee then lib.print.error("not able to find player with citizenid", employee) return end
+    local success = fireEmployee(employee, player, player.PlayerData[groupType].name, groupType)
+    local employeeFullName = firedEmployee.PlayerData.charinfo.firstname..' '..firedEmployee.PlayerData.charinfo.lastname
 
 	if success then
 		local logArea = groupType == 'gang' and 'Gang' or 'Boss'
@@ -299,7 +202,6 @@ lib.callback.register('qbx_management:server:fireEmployee', function(source, emp
 	else
 		exports.qbx_core:Notify(source, locale('error.unable_fire'), 'error')
 	end
-	return nil
 end)
 
 lib.callback.register('qbx_management:server:getBossMenus', function()

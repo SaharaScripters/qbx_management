@@ -47,7 +47,7 @@ local function manageEmployee(player, groupName, groupType)
             title = gradeTitle.name,
             description = locale('menu.grade')..groupGrade,
             onSelect = function()
-                lib.callback.await('qbx_management:server:updateGrade', false, player.cid, player.grade.level, tonumber(groupGrade), groupType)
+                lib.callback.await('qbx_management:server:updateGrade', false, player.cid, player.grade, tonumber(groupGrade), groupType)
                 OpenBossMenu(groupType)
             end,
         }
@@ -86,7 +86,7 @@ local function employeeList(groupType)
     for _, employee in pairs(employees) do
         employeesMenu[#employeesMenu + 1] = {
             title = employee.name,
-            description = employee.grade.name,
+            description = groupType == 'job' and JOBS[groupName].grades[employee.grade].name or GANGS[groupName].grades[employee.grade].name,
             onSelect = function()
                 manageEmployee(employee, groupName, groupType)
             end,
@@ -135,7 +135,7 @@ end
 -- Opens main boss menu changing function based on the group provided.
 ---@param groupType GroupType
 function OpenBossMenu(groupType)
-    if not QBX.PlayerData[groupType].name or not QBX.PlayerData[groupType].isboss then return end
+    if groupType ~= 'gang' and groupType ~= 'job' or not QBX.PlayerData[groupType].name or not QBX.PlayerData[groupType].isboss then return end
 
     local bossMenu = {
         {
@@ -171,6 +171,8 @@ function OpenBossMenu(groupType)
 
     lib.showContext('openBossMenu')
 end
+
+exports('OpenBossMenu', OpenBossMenu)
 
 local function createZone(zoneInfo)
     if config.useTarget then
