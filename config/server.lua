@@ -1,15 +1,10 @@
 return {
     discordWebhook = nil, -- Replace nil with your webhook if you chose to use discord logging over ox_lib logging
+    minOnDutyLogTimeMinutes = 30,
+    formatDateTime = '%m-%d-%Y %H:%M',
 
     -- While the config boss menu creation still works, it is recommended to use the runtime export instead.
     ---@alias GroupName string
-
-    ---@class ZoneInfo
-    ---@field coords vec3 coordinates of the zone
-    ---@field size vec3 size of the zone
-    ---@field rotation number rotation of the zone
-    ---@field type GroupType
-
     ---@type table<GroupName, ZoneInfo>
     menus = {
         lostmc = {

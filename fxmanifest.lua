@@ -1,10 +1,9 @@
 fx_version 'cerulean'
 game 'gta5'
-version '1.2.0'
 
 description 'qbx_management'
 repository 'https://github.com/Qbox-project/qbx_management'
-version '1.2.0'
+version '1.3.3'
 
 ox_lib 'locale'
 
@@ -18,7 +17,9 @@ client_scripts {
 }
 
 server_scripts {
+    '@oxmysql/lib/MySQL.lua',
     'server/main.lua',
+    'server/storage.lua',
 }
 
 files {
